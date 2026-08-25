@@ -5,6 +5,7 @@
 //     error logger plugins, and sandbox detection (port/host/strictPort).
 // You can pass additional config via defineConfig({ vite: { ... } }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { loadEnv } from "vite";
 
 // When Vercel runs the build (VERCEL=1 in their build env) we target Nitro's
 // `vercel` preset, which emits .vercel/output (Build Output API v3) so SSR +
@@ -13,21 +14,27 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 const isVercel = !!process.env.VERCEL;
 
 // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
-const supabasePublishableKey =
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), "");
+  const supabaseUrl = env.NEXT_PUBLIC_SUPABASE_URL || env.SUPABASE_URL;
+  const supabasePublishableKey =
+    env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_PUBLISHABLE_KEY;
 
-export default defineConfig({
-  tanstackStart: {
-    server: { entry: "server" },
-  },
-  // The connected project provides NEXT_PUBLIC_* variables, while the generated
-  // client code uses Vite's browser-safe VITE_* names.
-  vite: {
-    define: {
-      "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(supabaseUrl),
-      "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(supabasePublishableKey),
+  return {
+    tanstackStart: {
+      server: { entry: "server" },
     },
-  },
-  ...(isVercel ? { nitro: { preset: "vercel" } } : {}),
+    vite: {
+      define: {
+        "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(supabaseUrl),
+        "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(supabasePublishableKey),
+        "import.meta.env.NEXT_PUBLIC_SUPABASE_URL": JSON.stringify(supabaseUrl),
+        "import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(supabasePublishableKey),
+        "import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY": JSON.stringify(
+          env.NEXT_PUBLIC_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY,
+        ),
+      },
+    },
+    ...(isVercel ? { nitro: { preset: "vercel" } } : {}),
+  };
 });
