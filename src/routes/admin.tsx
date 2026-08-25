@@ -57,10 +57,10 @@ function AdminGate() {
   return <AdminDashboard />;
 }
 
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string;
-const RPC_URL = `${SUPABASE_URL}/rest/v1/rpc/check_hwid`;
-const SCRIPT_ENDPOINT = `https://project--99e78c61-02dc-4bac-bdf3-0501b0b864dc-dev.lovable.app${SCRIPT_ENDPOINT_PATH}`;
+const APP_ORIGIN = typeof window !== "undefined" ? window.location.origin : "";
+const CHECK_ENDPOINT = `${APP_ORIGIN}/api/check`;
+const SCRIPTS_ENDPOINT = `${APP_ORIGIN}/api/scripts`;
+const SCRIPT_ENDPOINT = `${APP_ORIGIN}${SCRIPT_ENDPOINT_PATH}`;
 const BUNDLED_SCRIPT_MAP = new Map(
   (bundledScripts as Array<{ game_id: string; script_url: string | null; is_paid?: boolean }>)
     .map((row) => [row.game_id, row.script_url] as const),
@@ -602,14 +602,14 @@ function AdminDashboard() {
         {tab === "credentials" && (
           <div className="space-y-4">
             <div className="rounded-xl border border-border bg-card p-6">
-              <h2 className="text-lg font-semibold">Backend credentials</h2>
+              <h2 className="text-lg font-semibold">Vercel API credentials</h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                Use these directly in your Roblox script. Calls go straight to the database — no edge-function bottleneck, unlimited throughput.
+                This deployment exposes the API from the same Vercel origin. Do not embed server secrets in Roblox scripts; the API issues short-lived session tokens.
               </p>
               <div className="mt-5 space-y-4">
-                <CredField label="Backend URL" value={SUPABASE_URL} />
-                <CredField label="Anon API Key" value={SUPABASE_ANON_KEY} mono />
-                <CredField label="RPC Endpoint" value={RPC_URL} />
+                <CredField label="API Base URL" value={APP_ORIGIN || "https://your-project.vercel.app"} />
+                <CredField label="HWID Check Endpoint" value={CHECK_ENDPOINT || "/api/check"} mono />
+                <CredField label="Script Map Endpoint" value={SCRIPTS_ENDPOINT || "/api/scripts"} mono />
               </div>
             </div>
             <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-200/90">
@@ -2091,16 +2091,16 @@ function CodeBlock({ code }: { code: string }) {
 }
 
 function ApiDocs() {
-  const scriptsMapEndpoint = `https://project--99e78c61-02dc-4bac-bdf3-0501b0b864dc-dev.lovable.app/api/scripts`;
+  const scriptsMapEndpoint = SCRIPTS_ENDPOINT;
 
   const lua = `-- Roblox Lua: full loader with per-game script URLs
 local HttpService = game:GetService("HttpService")
 
 local _request = request or (syn and syn.request) or http_request
 
-local SUPABASE_URL = "${SUPABASE_URL}"
-local SUPABASE_ANON_KEY = "${SUPABASE_ANON_KEY}"
-local SCRIPT_MAP_ENDPOINT = "${scriptsMapEndpoint}"
+  local API_BASE_URL = "${APP_ORIGIN}"
+  local CHECK_ENDPOINT = "${CHECK_ENDPOINT}"
+  local SCRIPT_MAP_ENDPOINT = "${scriptsMapEndpoint}"
 local SCRIPT_ENDPOINT = "${SCRIPT_ENDPOINT}"
 
 local function getHWID()
@@ -2138,15 +2138,12 @@ end
 
 local function checkSession(hwid)
     return requestJson({
-        Url = SUPABASE_URL .. "/rest/v1/rpc/check_hwid",
-        Method = "POST",
-        Headers = {
-            ["Content-Type"] = "application/json",
-            ["apikey"] = SUPABASE_ANON_KEY,
-            ["Authorization"] = "Bearer " .. SUPABASE_ANON_KEY,
+Url = CHECK_ENDPOINT,
+  Method = "POST",
+  Headers = {
+  ["Content-Type"] = "application/json",
         },
-        -- p_game_id is required when an allow list is configured
-        Body = HttpService:JSONEncode({ p_hwid = hwid, p_game_id = tostring(game.PlaceId) })
+Body = HttpService:JSONEncode({ hwid = hwid, game_id = tostring(game.PlaceId) })
     })
 end
 
@@ -2240,22 +2237,20 @@ else
     return
 end`;
 
-  const curl = `curl -X POST "${RPC_URL}" \\
+  const curl = `curl -X POST "${CHECK_ENDPOINT}" \\
   -H "Content-Type: application/json" \\
-  -H "apikey: ${SUPABASE_ANON_KEY}" \\
-  -H "Authorization: Bearer ${SUPABASE_ANON_KEY}" \\
-  -d '{"p_hwid":"YOUR_HWID_HERE","p_game_id":"YOUR_PLACE_ID"}'`;
+  -d '{"hwid":"YOUR_HWID_HERE","game_id":"YOUR_PLACE_ID"}'`;
 
   const loader = `-- Minimal safe loader for your script
 local h = game:GetService("HttpService")
-local k = "${SUPABASE_ANON_KEY}"
+  local CHECK_URL = "${CHECK_ENDPOINT}"
 local reqImpl = request or (syn and syn.request) or http_request
 local function req(o)
     local ok,r=pcall(function() return reqImpl(o) end)
     if ok and r and tonumber(r.StatusCode) and tonumber(r.StatusCode) >= 200 and tonumber(r.StatusCode) < 300 then return r end
     warn("Request failed: "..tostring(ok and r and r.Body or r))
 end
-local auth = req({ Url = "${RPC_URL}", Method = "POST", Headers = { ["Content-Type"]="application/json", ["apikey"]=k, ["Authorization"]="Bearer "..k }, Body = h:JSONEncode({ p_hwid = game:GetService("RbxAnalyticsService"):GetClientId(), p_game_id = tostring(game.PlaceId) }) })
+local auth = req({ Url = "${CHECK_ENDPOINT}", Method = "POST", Headers = { ["Content-Type"]="application/json" }, Body = h:JSONEncode({ hwid = game:GetService("RbxAnalyticsService"):GetClientId(), game_id = tostring(game.PlaceId) }) })
 if not auth then return end
 local ok,r = pcall(function() return h:JSONDecode(auth.Body) end)
 if not ok then warn("Bad auth response") return end
@@ -2286,23 +2281,22 @@ end`;
       <section>
         <h2 className="text-xl font-semibold">Overview</h2>
         <p className="mt-2 text-sm text-muted-foreground">
-          The endpoint is a single Postgres RPC: <code className="text-primary">check_hwid</code>. You POST a HWID, the server returns the status and how long is left.
-          Because you call the database directly, there is no edge-function quota — you get unlimited requests.
+The API runs on the same Vercel deployment as this dashboard. POST a HWID to the Vercel route; Redis enforces active timers and cooldowns, while Supabase stores durable session records.
         </p>
       </section>
 
       <section>
         <h2 className="text-xl font-semibold">Endpoint</h2>
         <div className="mt-3 rounded-lg border border-border bg-card p-4 text-sm">
-          <div><span className="font-mono text-primary">POST</span> <span className="font-mono">{RPC_URL}</span></div>
+          <div><span className="font-mono text-primary">POST</span> <span className="font-mono break-all">{CHECK_ENDPOINT}</span></div>
           <div className="mt-3 text-xs text-muted-foreground">Headers</div>
           <ul className="mt-1 list-disc pl-5 text-xs font-mono text-muted-foreground">
             <li>Content-Type: application/json</li>
-            <li>apikey: &lt;ANON_KEY&gt;</li>
-            <li>Authorization: Bearer &lt;ANON_KEY&gt;</li>
+<li>No API key required</li>
+  <li>Access is granted by the short-lived session token returned by this route</li>
           </ul>
           <div className="mt-3 text-xs text-muted-foreground">Body</div>
-          <pre className="mt-1 text-xs font-mono">{`{ "p_hwid": "string (1-256 chars)", "p_game_id": "place id (required if allow list set)" }`}</pre>
+          <pre className="mt-1 text-xs font-mono">{`{ "hwid": "string (3-256 chars)", "game_id": "place id (optional)" }`}</pre>
         </div>
       </section>
 
