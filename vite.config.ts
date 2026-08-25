@@ -13,9 +13,21 @@ import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 const isVercel = !!process.env.VERCEL;
 
 // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const supabasePublishableKey =
+  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+
 export default defineConfig({
   tanstackStart: {
     server: { entry: "server" },
+  },
+  // The connected project provides NEXT_PUBLIC_* variables, while the generated
+  // client code uses Vite's browser-safe VITE_* names.
+  vite: {
+    define: {
+      "import.meta.env.VITE_SUPABASE_URL": JSON.stringify(supabaseUrl),
+      "import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY": JSON.stringify(supabasePublishableKey),
+    },
   },
   ...(isVercel ? { nitro: { preset: "vercel" } } : {}),
 });
