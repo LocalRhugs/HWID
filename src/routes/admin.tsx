@@ -5,7 +5,7 @@ import { Activity, Clock, Shield, RefreshCw, Copy, Check, Ban, Settings as Setti
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { fetchGameName, fetchScriptSource, updateAppSettings, runGrowthAlerts } from "@/lib/roblox.functions";
-import { upsertAllowedGames } from "@/lib/games.functions";
+import { deleteAllowedGames, updateAllowedGame, upsertAllowedGames } from "@/lib/games.functions";
 import { combowickAdmin } from "@/lib/combowick.functions";
 import bundledScripts from "@/data/script-bundle.json";
 import { SCRIPT_CONTENT, SCRIPT_ENDPOINT_PATH, KNOWN_FREE_SCRIPTS, PAID_SCRIPT_SENTINEL, DISABLED_SCRIPT_SENTINEL } from "@/lib/protected-script";
@@ -826,7 +826,7 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
 
   async function toggle(g: Game) {
     const next = !g.enabled;
-    await supabase.from("allowed_games" as any).update({ enabled: next }).eq("game_id", g.game_id);
+    await updateAllowedGame({ data: { gameIds: [g.game_id], patch: { enabled: next } } });
     toast.success(next ? "Game enabled" : "Game disabled — will serve MainLoader1");
     reload();
   }
@@ -838,18 +838,23 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
     } else if (g.script_url === PAID_SCRIPT_SENTINEL) {
       update.script_url = BUNDLED_SCRIPT_MAP.get(g.game_id) ?? KNOWN_FREE_SCRIPTS[g.game_id] ?? null;
     }
-    await supabase.from("allowed_games" as any).update(update).eq("game_id", g.game_id);
+    await updateAllowedGame({ data: { gameIds: [g.game_id], patch: update } });
     toast.success(nextPaid ? "Marked as paid" : "Marked as free");
     reload();
   }
   async function toggleNoTimer(g: Game) {
     const next = !g.no_timer;
-    let query = supabase.from("allowed_games" as any).update({ no_timer: next });
-    query = g.universe_id
-      ? query.eq("universe_id", g.universe_id)
-      : query.eq("game_id", g.game_id);
-    const { error, data: updated } = await query.select("game_id");
-    const affected = updated?.length ?? 0;
+    const ids = g.universe_id
+      ? games.filter((x) => x.universe_id === g.universe_id).map((x) => x.game_id)
+      : [g.game_id];
+    let error: Error | null = null;
+    let affected = ids.length;
+    try {
+      await updateAllowedGame({ data: { gameIds: ids, patch: { no_timer: next } } });
+    } catch (cause) {
+      error = cause instanceof Error ? cause : new Error("No-timer update failed");
+      affected = 0;
+    }
     if (error) {
       toast.error(`No-timer update failed: ${error.message}`);
       return;
@@ -862,7 +867,7 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
   }
   async function remove(id: string) {
     if (!confirm(`Remove game ${id}?`)) return;
-    await supabase.from("allowed_games" as any).delete().eq("game_id", id);
+    await deleteAllowedGames({ data: { gameIds: [id] } });
     toast.success("Game removed");
     reload();
   }
@@ -872,7 +877,7 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
       const patch: Record<string, unknown> = { name: res.gameName };
       const uId = (res as { universeId?: string }).universeId;
       if (uId) patch.universe_id = uId;
-      await supabase.from("allowed_games" as any).update(patch).eq("game_id", id);
+      await updateAllowedGame({ data: { gameIds: [id], patch } });
       toast.success(`Name refreshed: ${res.gameName}`);
       reload();
     } catch {
@@ -903,16 +908,16 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
     const newUrl = editUrl.trim() || null;
     const isPaid = newUrl === PAID_SCRIPT_SENTINEL;
     const patch: Record<string, unknown> = { script_url: newUrl, is_paid: isPaid };
-    let query = supabase.from("allowed_games" as any).update(patch);
-    let affected = 1;
-    if (applyToUniverse && g.universe_id) {
-      const ids = games.filter((x) => x.universe_id === g.universe_id).map((x) => x.game_id);
-      affected = ids.length;
-      query = query.in("game_id", ids);
-    } else {
-      query = query.eq("game_id", g.game_id);
+    const ids = applyToUniverse && g.universe_id
+      ? games.filter((x) => x.universe_id === g.universe_id).map((x) => x.game_id)
+      : [g.game_id];
+    const affected = ids.length;
+    let error: Error | null = null;
+    try {
+      await updateAllowedGame({ data: { gameIds: ids, patch } });
+    } catch (cause) {
+      error = cause instanceof Error ? cause : new Error("Script URL update failed");
     }
-    const { error } = await query;
     setSavingId("");
     if (error) {
       toast.error(`Save failed: ${error.message}`);
@@ -942,14 +947,19 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
       cooldownVal = Math.floor(n);
     }
     setSavingTimersId(g.game_id);
-    let query = supabase
-      .from("allowed_games" as any)
-      .update({ session_seconds: sessionVal, cooldown_seconds: cooldownVal });
-    query = g.universe_id
-      ? query.eq("universe_id", g.universe_id)
-      : query.eq("game_id", g.game_id);
-    const { error, data: updated } = await query.select("game_id");
-    const affected = updated?.length ?? 0;
+    const ids = g.universe_id
+      ? games.filter((x) => x.universe_id === g.universe_id).map((x) => x.game_id)
+      : [g.game_id];
+    let error: Error | null = null;
+    const affected = ids.length;
+    try {
+      await updateAllowedGame({ data: {
+        gameIds: ids,
+        patch: { session_seconds: sessionVal, cooldown_seconds: cooldownVal },
+      } });
+    } catch (cause) {
+      error = cause instanceof Error ? cause : new Error("Timer update failed");
+    }
     setSavingTimersId("");
     if (error) { toast.error(`Save failed: ${error.message}`); return; }
     toast.success(
@@ -988,7 +998,12 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
   async function bulkUpdate(patch: Record<string, unknown>, label: string) {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
-    const { error } = await supabase.from("allowed_games" as any).update(patch).in("game_id", ids);
+    let error: Error | null = null;
+    try {
+      await updateAllowedGame({ data: { gameIds: ids, patch } });
+    } catch (cause) {
+      error = cause instanceof Error ? cause : new Error(`${label} failed`);
+    }
     if (error) toast.error(`${label} failed: ${error.message}`);
     else toast.success(`${label}: ${ids.length} games`);
     setSelected(new Set());
@@ -998,7 +1013,12 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
     const ids = Array.from(selected);
     if (ids.length === 0) return;
     if (!confirm(`Delete ${ids.length} games?`)) return;
-    const { error } = await supabase.from("allowed_games" as any).delete().in("game_id", ids);
+    let error: Error | null = null;
+    try {
+      await deleteAllowedGames({ data: { gameIds: ids } });
+    } catch (cause) {
+      error = cause instanceof Error ? cause : new Error("Delete failed");
+    }
     if (error) toast.error(`Delete failed: ${error.message}`);
     else toast.success(`Deleted ${ids.length} games`);
     setSelected(new Set());
@@ -1026,7 +1046,7 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
         const uId = (res as { universeId?: string }).universeId;
         if (uId) patch.universe_id = uId;
         if (Object.keys(patch).length > 0) {
-          await supabase.from("allowed_games" as any).update(patch).eq("game_id", g.game_id);
+          await updateAllowedGame({ data: { gameIds: [g.game_id], patch } });
         }
       } catch {}
       done++;
@@ -1081,12 +1101,14 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
         if (typeof r.script_url === "string") row.script_url = r.script_url;
         return row;
       });
-      const { error } = await supabase.from("allowed_games" as any).upsert(chunk, { onConflict: "game_id", ignoreDuplicates: false });
-      if (error) {
-        setImportMsg(`Error at chunk ${i}: ${error.message}`);
-        setImportBusy(false);
-        return;
-      }
+    try {
+      await upsertAllowedGames({ data: { rows: chunk } });
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Game import failed";
+      setImportMsg(`Error at chunk ${i}: ${message}`);
+      setImportBusy(false);
+      return;
+    }
       inserted += chunk.length;
       setImportMsg(`Imported ${inserted}/${clean.length}…`);
     }
