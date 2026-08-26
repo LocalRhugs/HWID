@@ -5,6 +5,7 @@ import { Activity, Clock, Shield, RefreshCw, Copy, Check, Ban, Settings as Setti
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { fetchGameName, fetchScriptSource, updateAppSettings, runGrowthAlerts } from "@/lib/roblox.functions";
+import { upsertAllowedGames } from "@/lib/games.functions";
 import { combowickAdmin } from "@/lib/combowick.functions";
 import bundledScripts from "@/data/script-bundle.json";
 import { SCRIPT_CONTENT, SCRIPT_ENDPOINT_PATH, KNOWN_FREE_SCRIPTS, PAID_SCRIPT_SENTINEL, DISABLED_SCRIPT_SENTINEL } from "@/lib/protected-script";
@@ -793,10 +794,15 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
       if (typeof inheritedPaid === "boolean") row.is_paid = inheritedPaid;
       return row;
     });
-    const { error } = await supabase.from("allowed_games" as any).upsert(rows, { onConflict: "game_id" });
+    let importError: string | null = null;
+    try {
+      await upsertAllowedGames({ data: { rows } });
+    } catch (error) {
+      importError = error instanceof Error ? error.message : "Game import failed";
+    }
     setGameId(""); setName(""); setScriptUrl(""); setBusy(false);
-    if (error) {
-      toast.error(`Add failed: ${error.message}`);
+    if (importError) {
+      toast.error(importError);
     } else if (ids.length === 1) {
       toast.success(`Added ${rows[0].name}`);
     } else {
