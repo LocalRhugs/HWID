@@ -16,7 +16,7 @@ function validateRows(raw: unknown): AllowedGameImportRow[] {
   return raw.map((value) => {
     const row = value as Partial<AllowedGameImportRow>;
     const gameId = String(row.game_id ?? "").trim();
-    if (!/^\\d+$/.test(gameId)) throw new Error("Every game ID must be numeric");
+    if (!/^\d+$/.test(gameId)) throw new Error("Every game ID must be numeric");
     return {
       game_id: gameId,
       name: row.name == null ? null : String(row.name).slice(0, 500),
@@ -48,7 +48,7 @@ export const updateAllowedGame = createServerFn({ method: "POST" })
     await requireUnlocked();
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const payload = data as { gameIds?: unknown; patch?: unknown };
-    const ids = Array.isArray(payload.gameIds) ? payload.gameIds.map(String).filter((id) => /^\\d+$/.test(id)) : [];
+    const ids = Array.isArray(payload.gameIds) ? payload.gameIds.map(String).filter((id) => /^\d+$/.test(id)) : [];
     if (!ids.length || ids.length > 500 || !payload.patch || typeof payload.patch !== "object") throw new Error("Invalid game update");
     const { error } = await supabaseAdmin.from("allowed_games").update(payload.patch as Record<string, unknown>).in("game_id", ids);
     if (error) throw new Error(`Game update failed: ${error.message}`);
@@ -61,7 +61,7 @@ export const deleteAllowedGames = createServerFn({ method: "POST" })
     const { requireUnlocked } = await import("./gate.server");
     await requireUnlocked();
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const ids = Array.isArray((data as { gameIds?: unknown })?.gameIds) ? (data as { gameIds: string[] }).gameIds.filter((id) => /^\\d+$/.test(id)) : [];
+    const ids = Array.isArray((data as { gameIds?: unknown })?.gameIds) ? (data as { gameIds: string[] }).gameIds.filter((id) => /^\d+$/.test(id)) : [];
     if (!ids.length || ids.length > 500) throw new Error("Invalid game delete");
     const { error } = await supabaseAdmin.from("allowed_games").delete().in("game_id", ids);
     if (error) throw new Error(`Game delete failed: ${error.message}`);
