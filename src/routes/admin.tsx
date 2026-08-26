@@ -1067,6 +1067,30 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
   type ParsedRow = { id: string; is_paid?: boolean; name?: string; script_url?: string | null; enabled?: boolean };
   type ImportContext = { inferredPaid?: boolean };
 
+  async function populateNamesForGames(gameIds: string[]) {
+    let completed = 0;
+    let updated = 0;
+    for (const id of gameIds) {
+      try {
+        const result = await lookup({ data: { gameId: id } });
+        const patch: Record<string, unknown> = {};
+        if (result.gameName && result.gameName !== id) patch.name = result.gameName;
+        const universeId = (result as { universeId?: string }).universeId;
+        if (universeId) patch.universe_id = universeId;
+        if (Object.keys(patch).length > 0) {
+          await updateAllowedGame({ data: { gameIds: [id], patch } });
+          updated++;
+        }
+      } catch {
+        // Keep the imported row when Roblox does not return metadata for an ID.
+      }
+      completed++;
+      setImportMsg(`Imported ${gameIds.length} games. Fetching names ${completed}/${gameIds.length}…`);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return updated;
+  }
+
   async function bulkUpsert(rows: ParsedRow[], label: string) {
     const merged = new Map<string, ParsedRow>();
     for (const row of rows) {
@@ -1112,8 +1136,14 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
       inserted += chunk.length;
       setImportMsg(`Imported ${inserted}/${clean.length}…`);
     }
+    const importedIds = clean.map((row) => row.id);
+    const updatedNames = await populateNamesForGames(importedIds);
     setImportBusy(false);
-    setImportMsg(`Imported ${inserted} games. Use "Fetch all missing names" to populate names.`);
+    setImportMsg(
+      updatedNames > 0
+        ? `Imported ${inserted} games and populated ${updatedNames} names.`
+        : `Imported ${inserted} games. Roblox returned no names for these IDs.`,
+    );
     reload();
   }
 
