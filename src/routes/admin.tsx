@@ -895,8 +895,8 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
       setPreviewBody("");
       return;
     }
-    setExpandedId(g.game_id);
-    setEditUrl(effectiveUrl(g));
+  setExpandedId(String(g.game_id));
+  setEditUrl(effectiveUrl(g));
     setEditSessionMin(g.session_seconds != null ? String(Math.round(g.session_seconds / 60)) : "");
     setEditCooldownSec(g.cooldown_seconds != null ? String(g.cooldown_seconds) : "");
     setPreviewBody("");
@@ -1508,11 +1508,14 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
                 </td>
                 <td className="px-3 py-3">
                   <button
+                    type="button"
                     onClick={() => toggleExpand(g)}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-transparent text-muted-foreground transition hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
-                    title="Open editor"
+                    aria-label={`Edit ${g.name || `game ${g.game_id}`}`}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/50 hover:bg-primary/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    title="Open game editor"
                   >
                     <Pencil className="h-3.5 w-3.5" />
+                    <span className="sr-only sm:not-sr-only">Edit</span>
                   </button>
                 </td>
                 <td className="px-4 py-3 font-mono text-xs">
@@ -1605,7 +1608,7 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
       <Sheet open={!!expandedId} onOpenChange={(o) => { if (!o) { setExpandedId(""); setPreviewBody(""); } }}>
         <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto bg-card/95 backdrop-blur-xl border-l border-border p-0">
           {(() => {
-            const g = games.find((x) => x.game_id === expandedId);
+            const g = games.find((x) => String(x.game_id) === expandedId);
             if (!g) return null;
             return (
               <>
