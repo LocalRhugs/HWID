@@ -5,7 +5,7 @@ import { Activity, Clock, Shield, RefreshCw, Copy, Check, Ban, Settings as Setti
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { fetchGameName, fetchScriptSource, updateAppSettings, runGrowthAlerts } from "@/lib/roblox.functions";
-import { deleteAllowedGames, updateAllowedGame, upsertAllowedGames } from "@/lib/games.functions";
+import { deleteAllowedGames, listAllowedGames, updateAllowedGame, upsertAllowedGames } from "@/lib/games.functions";
 import { combowickAdmin } from "@/lib/combowick.functions";
 import bundledScripts from "@/data/script-bundle.json";
 import { SCRIPT_CONTENT, SCRIPT_ENDPOINT_PATH, KNOWN_FREE_SCRIPTS, PAID_SCRIPT_SENTINEL, DISABLED_SCRIPT_SENTINEL } from "@/lib/protected-script";
@@ -141,6 +141,8 @@ function AdminDashboard() {
   const [searchHwid, setSearchHwid] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "cooldown">("all");
   const [gameFilter, setGameFilter] = useState<string>("all"); // "all" | game_id
+  const listGames = useServerFn(listAllowedGames);
+
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "remaining">("newest");
 
   async function load() {
@@ -153,10 +155,10 @@ function AdminDashboard() {
     if (term) sessionsQ = sessionsQ.ilike("hwid", `%${term}%`);
     if (statusFilter !== "all") sessionsQ = sessionsQ.eq("status", statusFilter);
 
-    const [s, b, g, c, sess, aCnt, cCnt, tCnt] = await Promise.all([
+    const gamesResult = await listGames({ data: undefined });
+    const [s, b, c, sess, aCnt, cCnt, tCnt] = await Promise.all([
       sessionsQ,
       supabase.from("banned_hwids" as any).select("*").order("banned_at", { ascending: false }).limit(500),
-      supabase.from("allowed_games" as any).select("*").order("added_at", { ascending: false }).limit(500),
       supabase.from("app_settings" as any).select("*").eq("id", 1).maybeSingle(),
       supabase.from("sessions" as any).select("hwid, script_url, created_at").order("created_at", { ascending: false }).limit(2000),
       supabase.from("hwid_sessions").select("hwid", { count: "exact", head: true }).eq("status", "active"),
@@ -170,7 +172,7 @@ function AdminDashboard() {
     setActiveCount(aCnt.count ?? 0);
     setCooldownCount(cCnt.count ?? 0);
     setBans(((b.data ?? []) as unknown) as Ban[]);
-    setGames(((g.data ?? []) as unknown) as Game[]);
+    setGames((gamesResult ?? []) as Game[]);
     if (c.data) setCfg((c.data as unknown) as Settings);
     const latest: Record<string, string | null> = {};
     for (const r of ((sess.data ?? []) as unknown) as Array<{ hwid: string; script_url: string | null }>) {

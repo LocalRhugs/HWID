@@ -40,6 +40,25 @@ function validateRows(raw: unknown): AllowedGameImportRow[] {
   });
 }
 
+export const listAllowedGames = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const { requireUnlocked } = await import("./gate.server");
+    await requireUnlocked();
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await supabaseAdmin
+      .from("allowed_games")
+      .select("game_id, name, enabled, added_at, is_paid, no_timer, script_url, session_seconds, cooldown_seconds, universe_id")
+      .order("added_at", { ascending: false })
+      .limit(500);
+    if (error) throw new Error(`Game list failed: ${error.message}`);
+    return (data ?? []) as Array<AllowedGameImportRow & {
+      added_at: string;
+      no_timer?: boolean;
+      session_seconds?: number | null;
+      cooldown_seconds?: number | null;
+    }>;
+  });
+
 export const upsertAllowedGames = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => ({ rows: validateRows((data as { rows?: unknown })?.rows) }))
   .handler(async ({ data }) => {
