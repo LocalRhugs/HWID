@@ -9,6 +9,18 @@ export type AllowedGameImportRow = {
   is_paid?: boolean;
 };
 
+type AllowedGamePatch = {
+  game_id?: string;
+  name?: string | null;
+  enabled?: boolean;
+  script_url?: string | null;
+  universe_id?: string | null;
+  is_paid?: boolean;
+  no_timer?: boolean;
+  session_seconds?: number | null;
+  cooldown_seconds?: number | null;
+};
+
 function validateRows(raw: unknown): AllowedGameImportRow[] {
   if (!Array.isArray(raw) || raw.length === 0 || raw.length > 500) {
     throw new Error("Import must contain between 1 and 500 games");
@@ -27,6 +39,25 @@ function validateRows(raw: unknown): AllowedGameImportRow[] {
     };
   });
 }
+
+export const listAllowedGames = createServerFn({ method: "GET" })
+  .handler(async () => {
+    const { requireUnlocked } = await import("./gate.server");
+    await requireUnlocked();
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data, error } = await supabaseAdmin
+      .from("allowed_games")
+      .select("game_id, name, enabled, added_at, is_paid, no_timer, script_url, session_seconds, cooldown_seconds, universe_id")
+      .order("added_at", { ascending: false })
+      .limit(500);
+    if (error) throw new Error(`Game list failed: ${error.message}`);
+    return (data ?? []) as Array<AllowedGameImportRow & {
+      added_at: string;
+      no_timer?: boolean;
+      session_seconds?: number | null;
+      cooldown_seconds?: number | null;
+    }>;
+  });
 
 export const upsertAllowedGames = createServerFn({ method: "POST" })
   .inputValidator((data: unknown) => ({ rows: validateRows((data as { rows?: unknown })?.rows) }))
@@ -50,7 +81,8 @@ export const updateAllowedGame = createServerFn({ method: "POST" })
     const payload = data as { gameIds?: unknown; patch?: unknown };
     const ids = Array.isArray(payload.gameIds) ? payload.gameIds.map(String).filter((id) => /^\d+$/.test(id)) : [];
     if (!ids.length || ids.length > 500 || !payload.patch || typeof payload.patch !== "object") throw new Error("Invalid game update");
-    const { error } = await supabaseAdmin.from("allowed_games").update(payload.patch as Record<string, unknown>).in("game_id", ids);
+    const patch = payload.patch as AllowedGamePatch;
+    const { error } = await supabaseAdmin.from("allowed_games").update(patch).in("game_id", ids);
     if (error) throw new Error(`Game update failed: ${error.message}`);
     return { count: ids.length };
   });

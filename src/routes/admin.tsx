@@ -5,7 +5,7 @@ import { Activity, Clock, Shield, RefreshCw, Copy, Check, Ban, Settings as Setti
 import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { fetchGameName, fetchScriptSource, updateAppSettings, runGrowthAlerts } from "@/lib/roblox.functions";
-import { deleteAllowedGames, updateAllowedGame, upsertAllowedGames } from "@/lib/games.functions";
+import { deleteAllowedGames, listAllowedGames, updateAllowedGame, upsertAllowedGames } from "@/lib/games.functions";
 import { combowickAdmin } from "@/lib/combowick.functions";
 import bundledScripts from "@/data/script-bundle.json";
 import { SCRIPT_CONTENT, SCRIPT_ENDPOINT_PATH, KNOWN_FREE_SCRIPTS, PAID_SCRIPT_SENTINEL, DISABLED_SCRIPT_SENTINEL } from "@/lib/protected-script";
@@ -141,6 +141,8 @@ function AdminDashboard() {
   const [searchHwid, setSearchHwid] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "cooldown">("all");
   const [gameFilter, setGameFilter] = useState<string>("all"); // "all" | game_id
+  const listGames = useServerFn(listAllowedGames);
+
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "remaining">("newest");
 
   async function load() {
@@ -153,10 +155,10 @@ function AdminDashboard() {
     if (term) sessionsQ = sessionsQ.ilike("hwid", `%${term}%`);
     if (statusFilter !== "all") sessionsQ = sessionsQ.eq("status", statusFilter);
 
-    const [s, b, g, c, sess, aCnt, cCnt, tCnt] = await Promise.all([
+    const gamesResult = await listGames({ data: undefined });
+    const [s, b, c, sess, aCnt, cCnt, tCnt] = await Promise.all([
       sessionsQ,
       supabase.from("banned_hwids" as any).select("*").order("banned_at", { ascending: false }).limit(500),
-      supabase.from("allowed_games" as any).select("*").order("added_at", { ascending: false }).limit(500),
       supabase.from("app_settings" as any).select("*").eq("id", 1).maybeSingle(),
       supabase.from("sessions" as any).select("hwid, script_url, created_at").order("created_at", { ascending: false }).limit(2000),
       supabase.from("hwid_sessions").select("hwid", { count: "exact", head: true }).eq("status", "active"),
@@ -170,7 +172,7 @@ function AdminDashboard() {
     setActiveCount(aCnt.count ?? 0);
     setCooldownCount(cCnt.count ?? 0);
     setBans(((b.data ?? []) as unknown) as Ban[]);
-    setGames(((g.data ?? []) as unknown) as Game[]);
+    setGames((gamesResult ?? []) as Game[]);
     if (c.data) setCfg((c.data as unknown) as Settings);
     const latest: Record<string, string | null> = {};
     for (const r of ((sess.data ?? []) as unknown) as Array<{ hwid: string; script_url: string | null }>) {
@@ -895,8 +897,8 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
       setPreviewBody("");
       return;
     }
-    setExpandedId(g.game_id);
-    setEditUrl(effectiveUrl(g));
+  setExpandedId(String(g.game_id));
+  setEditUrl(effectiveUrl(g));
     setEditSessionMin(g.session_seconds != null ? String(Math.round(g.session_seconds / 60)) : "");
     setEditCooldownSec(g.cooldown_seconds != null ? String(g.cooldown_seconds) : "");
     setPreviewBody("");
@@ -1067,6 +1069,30 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
   type ParsedRow = { id: string; is_paid?: boolean; name?: string; script_url?: string | null; enabled?: boolean };
   type ImportContext = { inferredPaid?: boolean };
 
+  async function populateNamesForGames(gameIds: string[]) {
+    let completed = 0;
+    let updated = 0;
+    for (const id of gameIds) {
+      try {
+        const result = await lookup({ data: { gameId: id } });
+        const patch: Record<string, unknown> = {};
+        if (result.gameName && result.gameName !== id) patch.name = result.gameName;
+        const universeId = (result as { universeId?: string }).universeId;
+        if (universeId) patch.universe_id = universeId;
+        if (Object.keys(patch).length > 0) {
+          await updateAllowedGame({ data: { gameIds: [id], patch } });
+          updated++;
+        }
+      } catch {
+        // Keep the imported row when Roblox does not return metadata for an ID.
+      }
+      completed++;
+      setImportMsg(`Imported ${gameIds.length} games. Fetching names ${completed}/${gameIds.length}…`);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return updated;
+  }
+
   async function bulkUpsert(rows: ParsedRow[], label: string) {
     const merged = new Map<string, ParsedRow>();
     for (const row of rows) {
@@ -1112,8 +1138,14 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
       inserted += chunk.length;
       setImportMsg(`Imported ${inserted}/${clean.length}…`);
     }
+    const importedIds = clean.map((row) => row.id);
+    const updatedNames = await populateNamesForGames(importedIds);
     setImportBusy(false);
-    setImportMsg(`Imported ${inserted} games. Use "Fetch all missing names" to populate names.`);
+    setImportMsg(
+      updatedNames > 0
+        ? `Imported ${inserted} games and populated ${updatedNames} names.`
+        : `Imported ${inserted} games. Roblox returned no names for these IDs.`,
+    );
     reload();
   }
 
@@ -1508,11 +1540,14 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
                 </td>
                 <td className="px-3 py-3">
                   <button
+                    type="button"
                     onClick={() => toggleExpand(g)}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-transparent text-muted-foreground transition hover:border-primary/40 hover:bg-primary/10 hover:text-primary"
-                    title="Open editor"
+                    aria-label={`Edit ${g.name || `game ${g.game_id}`}`}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 text-xs font-medium text-muted-foreground transition hover:border-primary/50 hover:bg-primary/10 hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    title="Open game editor"
                   >
                     <Pencil className="h-3.5 w-3.5" />
+                    <span className="sr-only sm:not-sr-only">Edit</span>
                   </button>
                 </td>
                 <td className="px-4 py-3 font-mono text-xs">
@@ -1605,7 +1640,7 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
       <Sheet open={!!expandedId} onOpenChange={(o) => { if (!o) { setExpandedId(""); setPreviewBody(""); } }}>
         <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto bg-card/95 backdrop-blur-xl border-l border-border p-0">
           {(() => {
-            const g = games.find((x) => x.game_id === expandedId);
+            const g = games.find((x) => String(x.game_id) === expandedId);
             if (!g) return null;
             return (
               <>
