@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { useServerFn } from "@tanstack/react-start";
 import { fetchGameName, fetchScriptSource, updateAppSettings, runGrowthAlerts } from "@/lib/roblox.functions";
 import { deleteAllowedGames, listAllowedGames, updateAllowedGame, upsertAllowedGames } from "@/lib/games.functions";
+import { fetchDashboard, clearHwidSession, banHwid as banHwidFn, unbanHwid as unbanHwidFn, saveScriptContent } from "@/lib/admin-data.functions";
 import { combowickAdmin } from "@/lib/combowick.functions";
 import bundledScripts from "@/data/script-bundle.json";
 import { SCRIPT_CONTENT, SCRIPT_ENDPOINT_PATH, KNOWN_FREE_SCRIPTS, PAID_SCRIPT_SENTINEL, DISABLED_SCRIPT_SENTINEL } from "@/lib/protected-script";
@@ -142,46 +143,33 @@ function AdminDashboard() {
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "cooldown">("all");
   const [gameFilter, setGameFilter] = useState<string>("all"); // "all" | game_id
   const listGames = useServerFn(listAllowedGames);
+  const loadDashboard = useServerFn(fetchDashboard);
+  const clearSessionFn = useServerFn(clearHwidSession);
+  const banFn = useServerFn(banHwidFn);
 
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "remaining">("newest");
 
   async function load() {
     const term = searchHwid.trim();
-    let sessionsQ = supabase
-      .from("hwid_sessions")
-      .select("*", { count: "exact" })
-      .order("created_at", { ascending: false })
-      .limit(sessionLimit);
-    if (term) sessionsQ = sessionsQ.ilike("hwid", `%${term}%`);
-    if (statusFilter !== "all") sessionsQ = sessionsQ.eq("status", statusFilter);
-
-    const gamesResult = await listGames({ data: undefined });
-    const [s, b, c, sess, aCnt, cCnt, tCnt] = await Promise.all([
-      sessionsQ,
-      supabase.from("banned_hwids" as any).select("*").order("banned_at", { ascending: false }).limit(500),
-      supabase.from("app_settings" as any).select("*").eq("id", 1).maybeSingle(),
-      supabase.from("sessions" as any).select("hwid, script_url, created_at").order("created_at", { ascending: false }).limit(2000),
-      supabase.from("hwid_sessions").select("hwid", { count: "exact", head: true }).eq("status", "active"),
-      supabase.from("hwid_sessions").select("hwid", { count: "exact", head: true }).eq("status", "cooldown"),
-      supabase.from("hwid_sessions").select("hwid", { count: "exact", head: true }),
+    const [dash, gamesResult] = await Promise.all([
+      loadDashboard({ data: { term, statusFilter, sessionLimit } }),
+      listGames({ data: undefined }),
     ]);
-    setRows((s.data ?? []) as Row[]);
-    // When filters are active, totalSessions reflects matching rows; otherwise full table count.
-    const filtersActive = !!term || statusFilter !== "all";
-    setTotalSessions(filtersActive ? (s.count ?? (s.data?.length ?? 0)) : (tCnt.count ?? s.count ?? (s.data?.length ?? 0)));
-    setActiveCount(aCnt.count ?? 0);
-    setCooldownCount(cCnt.count ?? 0);
-    setBans(((b.data ?? []) as unknown) as Ban[]);
+    setRows((dash.rows ?? []) as Row[]);
+    setTotalSessions(dash.totalSessions ?? 0);
+    setActiveCount(dash.activeCount ?? 0);
+    setCooldownCount(dash.cooldownCount ?? 0);
+    setBans(((dash.bans ?? []) as unknown) as Ban[]);
     setGames((gamesResult ?? []) as Game[]);
-    if (c.data) setCfg((c.data as unknown) as Settings);
+    if (dash.settings) setCfg((dash.settings as unknown) as Settings);
     const latest: Record<string, string | null> = {};
-    for (const r of ((sess.data ?? []) as unknown) as Array<{ hwid: string; script_url: string | null }>) {
+    for (const r of ((dash.history ?? []) as unknown) as Array<{ hwid: string; script_url: string | null }>) {
       if (!(r.hwid in latest)) latest[r.hwid] = r.script_url;
     }
     // Fall back to last_script_url stored on the hwid_sessions row itself —
     // this survives session/cooldown expiry and `sessions` cleanup, so the
     // game name keeps showing in the dashboard even after the timer hits 0.
-    for (const r of (s.data ?? []) as Row[]) {
+    for (const r of (dash.rows ?? []) as Row[]) {
       if (latest[r.hwid] == null && r.last_script_url) latest[r.hwid] = r.last_script_url;
     }
     setHwidScriptUrl(latest);
@@ -191,10 +179,7 @@ function AdminDashboard() {
   async function clearHwidEverywhere(hwid: string) {
     const value = hwid.trim();
     if (!value) return;
-    await Promise.all([
-      supabase.from("hwid_sessions").delete().eq("hwid", value),
-      supabase.from("sessions" as any).delete().eq("hwid", value),
-    ]);
+    await clearSessionFn({ data: { hwid: value } });
     setClearHwid("");
     load();
   }
@@ -202,14 +187,10 @@ function AdminDashboard() {
   useEffect(() => {
     load();
     const t = setInterval(() => setNow(Date.now()), 1000);
-    const channel = supabase
-      .channel("admin-dashboard")
-      .on("postgres_changes", { event: "*", schema: "public", table: "hwid_sessions" }, () => load())
-      .on("postgres_changes", { event: "*", schema: "public", table: "banned_hwids" }, () => load())
-      .on("postgres_changes", { event: "*", schema: "public", table: "allowed_games" }, () => load())
-      .on("postgres_changes", { event: "*", schema: "public", table: "app_settings" }, () => load())
-      .subscribe();
-    return () => { clearInterval(t); supabase.removeChannel(channel); };
+    // The password gate is only a cookie (not a Supabase login), so realtime over
+    // the anon key can't read these tables. Poll the gated server fn instead.
+    const poll = setInterval(() => { load(); }, 5000);
+    return () => { clearInterval(t); clearInterval(poll); };
   }, [sessionLimit, searchHwid, statusFilter]);
 
 
@@ -570,8 +551,8 @@ function AdminDashboard() {
                           <button
                             onClick={async () => {
                               if (!confirm(`Ban HWID ${r.hwid}?`)) return;
-                              await supabase.from("banned_hwids" as any).insert({ hwid: r.hwid, reason: "Banned from dashboard" });
-                              await clearHwidEverywhere(r.hwid);
+                              await banFn({ data: { hwid: r.hwid, reason: "Banned from dashboard" } });
+                              load();
                             }}
                             className="inline-flex items-center gap-1 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive hover:bg-destructive/20"
                           >
@@ -633,22 +614,24 @@ function BansTab({ bans, reload }: { bans: Ban[]; reload: () => void }) {
   const [hwid, setHwid] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const banFn = useServerFn(banHwidFn);
+  const unbanFn = useServerFn(unbanHwidFn);
 
   async function add() {
     if (!hwid.trim()) return;
     setBusy(true);
     const value = hwid.trim();
-    await supabase.from("banned_hwids" as any).insert({ hwid: value, reason: reason.trim() || null });
-    await Promise.all([
-      supabase.from("hwid_sessions").delete().eq("hwid", value),
-      supabase.from("sessions" as any).delete().eq("hwid", value),
-    ]);
-    setHwid(""); setReason(""); setBusy(false);
+    try {
+      await banFn({ data: { hwid: value, reason: reason.trim() || null } });
+      setHwid(""); setReason("");
+    } finally {
+      setBusy(false);
+    }
     reload();
   }
   async function remove(h: string) {
     if (!confirm(`Unban ${h}?`)) return;
-    await supabase.from("banned_hwids" as any).delete().eq("hwid", h);
+    await unbanFn({ data: { hwid: h } });
     reload();
   }
 
@@ -732,6 +715,7 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const lookup = useServerFn(fetchGameName);
   const fetchSource = useServerFn(fetchScriptSource);
+  const saveScriptFn = useServerFn(saveScriptContent);
   // Pagination — render in chunks of 10 to keep the table snappy
   const PAGE_SIZE = 10;
   const [visibleCount, setVisibleCount] = useState<number>(PAGE_SIZE);
@@ -1281,15 +1265,14 @@ function GamesTab({ games, reload, cfg }: { games: Game[]; reload: () => void; c
 
   async function saveScript() {
     setScriptBusy(true);
-    const { error } = await supabase
-      .from("app_settings" as any)
-      .update({ script_content: scriptContent, updated_at: new Date().toISOString() })
-      .eq("id", 1);
-    setScriptBusy(false);
-    if (error) {
-      toast.error(`Failed to save script: ${error.message}`);
+    try {
+      await saveScriptFn({ data: { script_content: scriptContent } });
+    } catch (e) {
+      setScriptBusy(false);
+      toast.error(`Failed to save script: ${e instanceof Error ? e.message : String(e)}`);
       return;
     }
+    setScriptBusy(false);
     setScriptSaved(true);
     setTimeout(() => setScriptSaved(false), 2000);
     toast.success("Fallback script saved");
