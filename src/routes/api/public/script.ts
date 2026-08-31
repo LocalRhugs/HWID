@@ -85,16 +85,23 @@ export const Route = createFileRoute("/api/public/script")({
             return new Response("missing token", { status: 401, headers });
           }
 
-          const { data, error } = await (supabaseAdmin.rpc as any)(
-            "validate_session_token",
-            { p_token: token },
-          );
+          const { data: session, error } = await supabaseAdmin
+            .from("hwid_sessions")
+            .select("hwid, status, session_token, session_token_created_at")
+            .eq("session_token", token)
+            .maybeSingle();
 
-          if (error || !data || (data as { valid: boolean }).valid !== true) {
+          if (
+            error ||
+            !session ||
+            session.status !== "active" ||
+            !session.session_token_created_at ||
+            new Date(session.session_token_created_at).getTime() + 30 * 60 * 1000 < Date.now()
+          ) {
             return new Response("invalid token", { status: 401, headers });
           }
 
-          const tokenData = data as { script_url?: string | null };
+          const tokenData = { script_url: null as string | null };
           const scriptUrl = typeof tokenData.script_url === "string" ? tokenData.script_url.trim() : "";
 
           if (scriptUrl === PAID_SCRIPT_SENTINEL) {

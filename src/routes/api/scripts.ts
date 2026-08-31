@@ -55,16 +55,17 @@ export const Route = createFileRoute("/api/scripts")({
           const cachedValid = await safeGet<1>(sessionCacheKey(token));
           if (!cachedValid) {
             const { data: session, error } = await supabaseAdmin
-              .from("sessions")
-              .select("token, used, expires_at")
-              .eq("token", token)
+              .from("hwid_sessions")
+              .select("session_token, session_token_created_at, status")
+              .eq("session_token", token)
               .maybeSingle();
 
             if (
               error ||
               !session ||
-              session.used ||
-              new Date(session.expires_at).getTime() < Date.now()
+              session.status !== "active" ||
+              !session.session_token_created_at ||
+              new Date(session.session_token_created_at).getTime() + 30 * 60 * 1000 < Date.now()
             ) {
               return new Response(JSON.stringify({ error: "invalid token" }), {
                 status: 401,
@@ -73,7 +74,7 @@ export const Route = createFileRoute("/api/scripts")({
             }
 
             // Cache for the shorter of 60s or remaining session lifetime.
-            const remainingMs = new Date(session.expires_at).getTime() - Date.now();
+            const remainingMs = new Date(session.session_token_created_at).getTime() + 30 * 60 * 1000 - Date.now();
             const ttl = Math.max(1, Math.min(SESSION_CACHE_TTL_SECONDS, Math.floor(remainingMs / 1000)));
             await safeSetEx(sessionCacheKey(token), ttl, 1);
           }

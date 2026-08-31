@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { safeGet, safeSetEx, safeDel } from "@/lib/redis.server";
+import { randomBytes } from "node:crypto";
 
 const SESSION_SECONDS = 30 * 60;
 const COOLDOWN_SECONDS = 5 * 60 * 60;
@@ -18,6 +19,20 @@ function json(body: unknown, status = 200) {
       "Cache-Control": "no-store",
     },
   });
+}
+
+function createSessionToken() {
+  return randomBytes(32).toString("base64url");
+}
+
+async function issueSessionToken(hwid: string, startedAt: number) {
+  const sessionToken = createSessionToken();
+  const { error } = await supabaseAdmin.from("hwid_sessions").update({
+    session_token: sessionToken,
+    session_token_created_at: new Date(startedAt).toISOString(),
+  }).eq("hwid", hwid);
+  if (error) throw new Error(error.message);
+  return sessionToken;
 }
 
 function remaining(state: TimerState, now: number) {
@@ -54,7 +69,11 @@ export const Route = createFileRoute("/api/check")({
         if (cached && (cached.status === "active" || cached.status === "cooldown")) {
           const left = remaining(cached, now);
           if (left > 0) {
-            return json({ status: cached.status === "active" ? "session_active" : "cooldown", remaining: left });
+            if (cached.status === "active") {
+              const sessionToken = await issueSessionToken(hwid, cached.startedAt);
+              return json({ status: "session_active", remaining: left, session_token: sessionToken });
+            }
+            return json({ status: "cooldown", remaining: left });
           }
           await safeDel(timerKey(hwid));
         }
@@ -68,7 +87,8 @@ export const Route = createFileRoute("/api/check")({
 
         if (!existing) {
           await persistActive(hwid, now);
-          return json({ status: "allowed", remaining: SESSION_SECONDS });
+          const sessionToken = await issueSessionToken(hwid, now);
+          return json({ status: "allowed", remaining: SESSION_SECONDS, session_token: sessionToken });
         }
 
         if (existing.status === "active" && existing.session_start) {
@@ -76,7 +96,8 @@ export const Route = createFileRoute("/api/check")({
           const left = SESSION_SECONDS - Math.floor((now - startedAt) / 1000);
           if (left > 0) {
             await safeSetEx(timerKey(hwid), left, { status: "active", startedAt });
-            return json({ status: "session_active", remaining: left });
+            const sessionToken = await issueSessionToken(hwid, startedAt);
+            return json({ status: "session_active", remaining: left, session_token: sessionToken });
           }
           const { error } = await supabaseAdmin.from("hwid_sessions").update({
             status: "cooldown", cooldown_start: new Date(now).toISOString(), session_start: null,
@@ -95,7 +116,8 @@ export const Route = createFileRoute("/api/check")({
           }
           await supabaseAdmin.from("hwid_sessions").delete().eq("hwid", hwid);
           await persistActive(hwid, now);
-          return json({ status: "allowed", remaining: SESSION_SECONDS });
+          const sessionToken = await issueSessionToken(hwid, now);
+          return json({ status: "allowed", remaining: SESSION_SECONDS, session_token: sessionToken });
         }
 
         return json({ status: "error", error: "Unknown state" }, 500);
