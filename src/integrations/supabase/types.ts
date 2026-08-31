@@ -372,33 +372,39 @@ export type Database = {
         Relationships: []
       }
       hwid_sessions: {
-        Row: {
-          cooldown_start: string | null
-          created_at: string
-          hwid: string
-          last_check_at: string | null
+  Row: {
+  cooldown_start: string | null
+  created_at: string
+  hwid: string
+  session_token: string | null
+  session_token_created_at: string | null
+  last_check_at: string | null
           last_game_id: string | null
           last_script_url: string | null
           session_start: string | null
           status: string
           throttle_violations: number
         }
-        Insert: {
-          cooldown_start?: string | null
-          created_at?: string
-          hwid: string
-          last_check_at?: string | null
+  Insert: {
+  cooldown_start?: string | null
+  created_at?: string
+  hwid: string
+  session_token?: string | null
+  session_token_created_at?: string | null
+  last_check_at?: string | null
           last_game_id?: string | null
           last_script_url?: string | null
           session_start?: string | null
           status?: string
           throttle_violations?: number
         }
-        Update: {
-          cooldown_start?: string | null
-          created_at?: string
-          hwid?: string
-          last_check_at?: string | null
+  Update: {
+  cooldown_start?: string | null
+  created_at?: string
+  hwid?: string
+  session_token?: string | null
+  session_token_created_at?: string | null
+  last_check_at?: string | null
           last_game_id?: string | null
           last_script_url?: string | null
           session_start?: string | null
